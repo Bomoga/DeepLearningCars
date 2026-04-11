@@ -8,11 +8,9 @@ class DQN(nn.Module):
     def __init__(self, input_size=7, output_size=5):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_size, 128),
+            nn.Linear(input_size, 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, output_size)
+            nn.Linear(64, output_size)
         )
 
     def forward(self, x):
@@ -20,7 +18,7 @@ class DQN(nn.Module):
 
 
 class ReplayBuffer:
-    def __init__(self, capacity=10_000):
+    def __init__(self, capacity=5000):
         self.buffer = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state, done):
@@ -30,10 +28,10 @@ class ReplayBuffer:
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
         return (
-            np.array(states),
+            np.array(states, dtype=np.float32),
             np.array(actions),
             np.array(rewards, dtype=np.float32),
-            np.array(next_states),
+            np.array(next_states, dtype=np.float32),
             np.array(dones, dtype=np.float32),
         )
 
