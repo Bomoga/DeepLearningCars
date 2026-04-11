@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+
+# Model weights
+src/model/dqn_weights.pth
+
+# Old NEAT files
+winner.pkl
+neat-checkpoint-*

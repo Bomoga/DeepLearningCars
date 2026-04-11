@@ -1,38 +1,32 @@
 """
-DeepLearningCars — NEAT self-driving car simulation
-----------------------------------------------------
+DeepLearningCars — DQN self-driving car simulation
+---------------------------------------------------
 Usage:
-    python main.py              # train for 50 generations
-    python main.py --replay     # replay the saved winner (winner.pkl)
-    python main.py --gen 100    # train for 100 generations
+    python main.py              # train
+    python main.py --replay     # replay saved model (dqn_weights.pth)
+    python main.py --ep 500     # train for 500 episodes
 """
 
 import os
 import sys
-import pickle
 import argparse
 
 import pygame
-import neat
 
-from src.track      import Track
-from src.renderer   import Renderer
-from src.simulation import make_eval_genomes, START_X, START_Y, START_ANGLE
-from src.car        import Car
+from src.track       import Track
+from src.renderer    import Renderer
+from src.car         import Car
+from src.model.agent import DQNAgent, ACTIONS
+from src.model.train import CHECKPOINTS, START_X, START_Y, START_ANGLE, MAX_FRAMES
 
-WIDTH, HEIGHT = 1200, 800
-CONFIG_PATH   = os.path.join(os.path.dirname(__file__), "config", "neat_config.txt")
-WINNER_PATH   = os.path.join(os.path.dirname(__file__), "winner.pkl")
+WIDTH, HEIGHT   = 1200, 800
+WEIGHTS_PATH    = os.path.join(os.path.dirname(__file__), "src", "model", "dqn_weights.pth")
 
-
-# ---------------------------------------------------------------------------
-# Pygame initialisation (shared across training and replay)
-# ---------------------------------------------------------------------------
 
 def init_pygame() -> tuple[pygame.Surface, pygame.time.Clock]:
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("DeepLearningCars — NEAT")
+    pygame.display.set_caption("DeepLearningCars — DQN")
     clock  = pygame.time.Clock()
     return screen, clock
 
@@ -41,34 +35,67 @@ def init_pygame() -> tuple[pygame.Surface, pygame.time.Clock]:
 # Training
 # ---------------------------------------------------------------------------
 
-def train(generations: int) -> None:
+def train(num_episodes: int) -> None:
     screen, clock = init_pygame()
     track    = Track()
     renderer = Renderer(screen)
+    agent    = DQNAgent()
 
-    config = neat.Config(
-        neat.DefaultGenome,
-        neat.DefaultReproduction,
-        neat.DefaultSpeciesSet,
-        neat.DefaultStagnation,
-        CONFIG_PATH,
-    )
+    for episode in range(num_episodes):
+        car             = Car(START_X, START_Y, START_ANGLE)
+        state           = car.get_sensor_readings(track)
+        total_reward    = 0.0
+        next_checkpoint = 0
 
-    population = neat.Population(config)
-    population.add_reporter(neat.StdOutReporter(True))
-    population.add_reporter(neat.StatisticsReporter())
-    population.add_reporter(neat.Checkpointer(
-        generation_interval=5,
-        filename_prefix="neat-checkpoint-",
-    ))
+        for frame in range(MAX_FRAMES):
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_d:
+                        renderer.debug_rays = not renderer.debug_rays
 
-    eval_genomes = make_eval_genomes(screen, track, renderer, clock)
-    winner = population.run(eval_genomes, generations)
+            action_idx      = agent.select_action(state)
+            steer, throttle = ACTIONS[action_idx]
+            prev_fitness    = car.fitness
 
-    print(f"\nBest genome:\n{winner}")
-    with open(WINNER_PATH, "wb") as f:
-        pickle.dump(winner, f)
-    print(f"Winner saved to {WINNER_PATH}")
+            car.update(steer, throttle)
+
+            done = track.is_colliding(car.position.x, car.position.y)
+            if done:
+                reward = -100.0
+            else:
+                reward = car.fitness - prev_fitness
+                if next_checkpoint < len(CHECKPOINTS):
+                    cx, cy, r = CHECKPOINTS[next_checkpoint]
+                    if car.position.distance_to((cx, cy)) < r:
+                        reward += 200.0
+                        next_checkpoint += 1
+
+            next_state = car.get_sensor_readings(track)
+            agent.store(state, action_idx, reward, next_state, float(done))
+            agent.train_step()
+
+            state        = next_state
+            total_reward += reward
+
+            renderer.draw(track, [car], episode, total_reward)
+            pygame.display.set_caption(
+                f"DQN | Episode: {episode} | Reward: {total_reward:.1f} | Epsilon: {agent.epsilon:.3f}"
+            )
+            pygame.display.flip()
+            clock.tick(60)
+
+            if done:
+                break
+
+        agent.decay_epsilon()
+        print(f"Episode {episode:4d} | Reward: {total_reward:8.1f} | Epsilon: {agent.epsilon:.3f}")
+
+        if episode % 50 == 0:
+            agent.save(WEIGHTS_PATH)
+            print(f"  Model saved to {WEIGHTS_PATH}")
 
     pygame.quit()
 
@@ -78,34 +105,26 @@ def train(generations: int) -> None:
 # ---------------------------------------------------------------------------
 
 def replay() -> None:
-    if not os.path.exists(WINNER_PATH):
-        print(f"No winner found at {WINNER_PATH}. Train first.")
+    if not os.path.exists(WEIGHTS_PATH):
+        print(f"No model found at {WEIGHTS_PATH}. Train first.")
         sys.exit(1)
-
-    with open(WINNER_PATH, "rb") as f:
-        winner = pickle.load(f)
-
-    config = neat.Config(
-        neat.DefaultGenome,
-        neat.DefaultReproduction,
-        neat.DefaultSpeciesSet,
-        neat.DefaultStagnation,
-        CONFIG_PATH,
-    )
 
     screen, clock = init_pygame()
     track    = Track()
     renderer = Renderer(screen)
-    renderer.debug_rays = True  # always show rays in replay
+    renderer.debug_rays = True
 
-    net = neat.nn.FeedForwardNetwork.create(winner, config)
+    agent = DQNAgent()
+    agent.load(WEIGHTS_PATH)
+    agent.epsilon = 0.0  # no exploration during replay
+
     car = Car(START_X, START_Y, START_ANGLE)
 
-    running = True
-    while running:
+    while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                pygame.quit()
+                sys.exit()
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_d:
                     renderer.debug_rays = not renderer.debug_rays
@@ -113,21 +132,20 @@ def replay() -> None:
                     car = Car(START_X, START_Y, START_ANGLE)
 
         if car.alive:
-            readings = car.get_sensor_readings(track)
-            output   = net.activate(readings)
-            car.update(output[0], output[1])
+            state      = car.get_sensor_readings(track)
+            action_idx = agent.select_action(state)
+            steer, throttle = ACTIONS[action_idx]
+            car.update(steer, throttle)
             if track.is_colliding(car.position.x, car.position.y):
                 car.alive = False
 
         renderer.draw(track, [car], generation=0, best_fitness=car.fitness)
         pygame.display.set_caption(
-            f"DeepLearningCars — REPLAY  |  fitness: {car.fitness:.0f}"
+            f"DQN REPLAY | Fitness: {car.fitness:.0f}"
             + ("  [DEAD — press R to reset]" if not car.alive else "")
         )
         pygame.display.flip()
         clock.tick(60)
-
-    pygame.quit()
 
 
 # ---------------------------------------------------------------------------
@@ -135,21 +153,15 @@ def replay() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="DeepLearningCars NEAT simulation")
-    parser.add_argument(
-        "--replay", action="store_true",
-        help="Replay the saved winner genome instead of training",
-    )
-    parser.add_argument(
-        "--gen", type=int, default=50,
-        help="Number of generations to train (default: 50)",
-    )
+    parser = argparse.ArgumentParser(description="DeepLearningCars DQN simulation")
+    parser.add_argument("--replay", action="store_true", help="Replay saved model")
+    parser.add_argument("--ep", type=int, default=500, help="Number of training episodes (default: 500)")
     args = parser.parse_args()
 
     if args.replay:
         replay()
     else:
-        train(args.gen)
+        train(args.ep)
 
 
 if __name__ == "__main__":
