@@ -1,11 +1,3 @@
-"""
-DeepLearningCars — DQN self-driving car simulation
----------------------------------------------------
-Usage:
-    python main.py              # train
-    python main.py --replay     # replay saved model (dqn_weights.pth)
-    python main.py --ep 500     # train for 500 episodes
-"""
 
 import os
 import sys
