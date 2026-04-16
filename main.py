@@ -83,7 +83,9 @@ def train(num_episodes: int) -> None:
                 break
 
         agent.decay_epsilon()
-        print(f"Episode {episode:4d} | Reward: {total_reward:8.1f} | Epsilon: {agent.epsilon:.3f}")
+        agent.record_episode(total_reward, next_checkpoint)
+        print(f"Episode {episode:4d} | Reward: {total_reward:8.1f} | "
+              f"Checkpoints: {next_checkpoint} | Epsilon: {agent.epsilon:.3f}")
 
         if episode % 50 == 0:
             agent.save(WEIGHTS_PATH)
